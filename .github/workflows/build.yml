@@ -1,2 +1,10 @@
 name: Build
+
 on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "pretending to build"
+      - run: exit 1
