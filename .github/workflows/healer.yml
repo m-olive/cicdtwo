@@ -1,5 +1,22 @@
-on: workflow_run
-workflows: [Build]
-types: [completed]
+name: Healer
 
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
 
+jobs:
+  on-success:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - run: echo "Build passed, nothing to heal"
+
+  on-failure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - run: echo "conclusion=${{ github.event.workflow_run.conclusion }}"
+      - run: echo "head_sha=${{ github.event.workflow_run.head_sha }}"
+      - run: echo "head_branch=${{ github.event.workflow_run.head_branch }}"
+      - run: echo "run_id=${{ github.event.workflow_run.id }}"
