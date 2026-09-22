@@ -6,9 +6,20 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "test file" > test.txt
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - run: mvn -B -ntp test 2>&1 | tee build.log
+        shell: bash
+
       - uses: actions/upload-artifact@v4 
+        if: always()
         with: 
           name: test
-          path: test.txt
-      - run: exit 1
+          path: |
+            target/surefire-reports/
+            build.log
