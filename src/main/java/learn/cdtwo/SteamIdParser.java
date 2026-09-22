@@ -18,7 +18,7 @@ public class SteamIdParser {
 
         if (value.startsWith(PROFILE_PREFIX)) {
             value = value.substring(PROFILE_PREFIX.length());
-            int slash = value.indexOf('/');
+            int slash = value.indexOf('#');
             if (slash >= 0) {
                 value = value.substring(0, slash);
             }

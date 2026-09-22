@@ -34,6 +34,7 @@ jobs:
           name: test
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - run: cat test.txt
-
-
+      - run: ls -R target/surefire-reports build.log
+        continue-on-error: true
+      - run: grep -e 'Failed to execute goal' -e '<failure' -e '<error' build.log target/surefire-reports/*.xml
+        continue-on-error: true
