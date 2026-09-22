@@ -6,5 +6,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "pretending to build"
+      - run: echo "test file" > test.txt
+      - uses: actions/upload-artifact@v4 
+        with: 
+          name: test
+          path: test.txt
       - run: exit 1
