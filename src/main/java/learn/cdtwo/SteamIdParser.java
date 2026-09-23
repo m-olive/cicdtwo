@@ -36,6 +36,6 @@ public class SteamIdParser {
                 return value.substring(prefix.length());
             }
         }
-        return value;
+        return valu;
     }
 }
