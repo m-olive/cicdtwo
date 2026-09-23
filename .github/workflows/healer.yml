@@ -12,29 +12,215 @@ jobs:
     steps:
       - run: echo "Build passed, nothing to heal"
 
-  on-failure:
+  classify:
     runs-on: ubuntu-latest
-
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     permissions:
       actions: read
       contents: read
+    outputs:
+      class: ${{ steps.route.outputs.class }}
+      action: ${{ steps.route.outputs.action }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: trusted
 
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: code
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: test
+          path: evidence
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - run: >
+          python3 trusted/.github/healer/classify.py
+          --log evidence/build.log
+          --reports evidence/target/surefire-reports
+          --root code
+          > repair-request.json
+
+      - id: route
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          cat repair-request.json
+          action=$(jq -r .action repair-request.json)
+          if [[ "$HEAD_BRANCH" == heal/* && "$action" == repair ]]; then
+            action=escalate
+          fi
+          echo "class=$(jq -r .class repair-request.json)" >> "$GITHUB_OUTPUT"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repair-request
+          path: repair-request.json
+
+  retry:
+    needs: classify
+    if: ${{ needs.classify.outputs.action == 'retry' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+    steps:
+      - run: |
+          if [ "$RUN_ATTEMPT" -ge 3 ]; then
+            echo "::error::Infrastructure failure persisted across $RUN_ATTEMPT attempts"
+            exit 1
+          fi
+          gh run rerun "$RUN_ID" --failed
+
+  repair:
+    needs: classify
+    if: ${{ needs.classify.outputs.action == 'repair' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    services:
+      ollama:
+        image: ollama/ollama
+        ports:
+          - 11434:11434
+    outputs:
+      status: ${{ steps.heal.outputs.status }}
+      attempts: ${{ steps.heal.outputs.attempts }}
+    env:
+      HEALER_MODEL: qwen2.5-coder:7b
+      OLLAMA_HOST: http://localhost:11434
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: trusted
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: code
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: code/pom.xml
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: repair-request
+
+      - run: |
+          for i in $(seq 30); do curl -sf "$OLLAMA_HOST/api/version" && break; sleep 2; done
+          curl -sf "$OLLAMA_HOST/api/pull" -d "{\"model\":\"$HEALER_MODEL\",\"stream\":false}"
+
+      - id: heal
+        run: python3 trusted/.github/healer/heal.py --request repair-request.json --root code --out out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patch
+          path: out/
+
+  propose:
+    needs: [classify, repair]
+    if: ${{ needs.repair.outputs.status == 'fixed' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      CLASS: ${{ needs.classify.outputs.class }}
+      ATTEMPTS: ${{ needs.repair.outputs.attempts }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - run: echo "conclusion=${{ github.event.workflow_run.conclusion }}"
-      - run: echo "head_sha=${{ github.event.workflow_run.head_sha }}"
-      - run: echo "head_branch=${{ github.event.workflow_run.head_branch }}"
-      - run: echo "run_id=${{ github.event.workflow_run.id }}"
       - uses: actions/download-artifact@v4
         with:
-          name: test
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-      - run: ls -R target/surefire-reports build.log
-        continue-on-error: true
-      - run: grep -e 'Failed to execute goal' -e '<failure' -e '<error' build.log target/surefire-reports/*.xml
-        continue-on-error: true
+          name: patch
+          path: ${{ runner.temp }}/patch
+
+      - name: enforce allowlist
+        env:
+          PATCH: ${{ runner.temp }}/patch/patch.diff
+        run: |
+          git apply --check "$PATCH"
+          bad=$(git apply --numstat "$PATCH" | cut -f3 | grep -Ev '^src/main/java/.+\.java$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::patch touches protected paths: $bad"
+            exit 1
+          fi
+          git apply "$PATCH"
+
+      - name: push fix branch and dispatch proof build
+        run: |
+          branch="heal/${HEAD_SHA:0:7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A src/main/java
+          git commit -m "heal: $CLASS on ${HEAD_SHA:0:7}"
+          git push --force origin "$branch"
+          gh workflow run build.yml --ref "$branch"
+          echo "BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: open pull request
+        env:
+          RESULT: ${{ runner.temp }}/patch/patch-result.json
+          PATCH: ${{ runner.temp }}/patch/patch.diff
+        run: |
+          {
+            echo "Automated repair for \`$CLASS\` on \`$HEAD_BRANCH\` at \`$HEAD_SHA\`."
+            echo
+            echo "**Hypothesis:** $(jq -r .hypothesis "$RESULT")"
+            echo
+            echo "**Confidence:** $(jq -r .confidence "$RESULT")  **Attempts:** $ATTEMPTS of 3"
+            echo
+            echo "The patch passed the full test suite inside the repair job. A proof build on this branch was dispatched."
+            echo "Only files under \`src/main/java\` were changed; tests and CI configuration are protected."
+            echo
+            echo '```diff'
+            cat "$PATCH"
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+          cat "$RUNNER_TEMP/body.md" >> "$GITHUB_STEP_SUMMARY"
+          if ! gh pr create --base "$HEAD_BRANCH" --head "$BRANCH" --title "heal: $CLASS on ${HEAD_SHA:0:7}" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "::warning::PR creation refused; open it from the compare link"
+            echo "Compare: https://github.com/$GH_REPO/compare/$HEAD_BRANCH...$BRANCH?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  escalate:
+    needs: [classify, repair]
+    if: ${{ always() && (needs.classify.outputs.action == 'escalate' || needs.repair.outputs.status == 'exhausted' || needs.repair.result == 'failure') }}
+    runs-on: ubuntu-latest
+    env:
+      CLASS: ${{ needs.classify.outputs.class }}
+      REPAIR: ${{ needs.repair.outputs.status || needs.repair.result }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - run: |
+          echo "::error::Escalated to human: class=$CLASS repair=$REPAIR branch=$HEAD_BRANCH sha=$HEAD_SHA"
+          echo "### Escalated: \`$CLASS\` on \`$HEAD_BRANCH\` (\`$HEAD_SHA\`), repair: \`$REPAIR\`" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
