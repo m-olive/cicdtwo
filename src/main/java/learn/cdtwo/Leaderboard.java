@@ -20,8 +20,7 @@ public class Leaderboard {
         return rows.stream()
                 .filter(row -> row.votes() >= MIN_VOTES)
                 .map(row -> new RankedGame(row.gameId(), row.title(), average(row), mine.get(row.gameId())))
-                .sorted(Comparator.comparingDouble(RankedGame::average).reversed()
-                        .thenComparing(RankedGame::title))
+                .sorted(Comparator.comparingDouble(RankedGame::average).reversed())
                 .limit(TOP_N)
                 .toList();
     }
