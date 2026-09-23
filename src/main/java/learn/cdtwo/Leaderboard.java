@@ -27,6 +27,6 @@ public class Leaderboard {
     }
 
     static double average(RatingRow row) {
-        return row.total() / row.votes();
+        return (double) row.total() / row.votes();
     }
 }
