@@ -7,6 +7,7 @@ from pathlib import Path
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 MODEL = os.environ.get("HEALER_MODEL", "qwen2.5-coder:7b")
 TIMEOUT = int(os.environ.get("HEALER_TIMEOUT", "1200"))
+NEIGHBORS = os.environ.get("HEALER_NEIGHBORS", "1") != "0"
 
 SYSTEM = """You repair failing builds in a Java 21 Maven project.
 
@@ -51,7 +52,7 @@ def context_files(request, root):
     main = [p for p in request["suspect_files"] if p.startswith("src/main/java/")]
     tests = [p for p in request["suspect_files"] if p.startswith("src/test/java/")]
     names = {Path(p).stem for p in main}
-    for path in list(main) + tests:
+    for path in (list(main) + tests) if NEIGHBORS else []:
         text = (root / path).read_text()
         for candidate in sorted((root / "src/main/java").rglob("*.java")):
             rel = str(candidate.relative_to(root))
