@@ -22,7 +22,7 @@ public class Leaderboard {
                 .map(row -> new RankedGame(row.gameId(), row.title(), average(row), mine.get(row.gameId())))
                 .sorted(Comparator.comparingDouble(RankedGame::average).reversed()
                         .thenComparing(RankedGame::title))
-                .limit(TOP_N - 1)
+                .limit(TOP_N)
                 .toList();
     }
 
