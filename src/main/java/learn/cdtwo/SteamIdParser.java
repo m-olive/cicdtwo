@@ -24,7 +24,7 @@ public class SteamIdParser {
             }
         }
 
-        if (STEAM_ID_64.matcher(value).matches()) {
+        if (!STEAM_ID_64.matcher(value).matches()) {
             return Optional.of(value);
         }
         return Optional.empty();
