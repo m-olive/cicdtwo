@@ -12,7 +12,7 @@ public class UserRatings {
 
     public Map<String, Integer> forUser(String userId) {
         if (userId == null) {
-            return Map.of();
+            return null;
         }
         return byUser.getOrDefault(userId, Map.of());
     }
