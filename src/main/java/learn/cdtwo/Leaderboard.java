@@ -19,7 +19,7 @@ public class Leaderboard {
         Map<String, Integer> mine = userRatings.forUser(userId);
         return rows.stream()
                 .filter(row -> row.votes() >= MIN_VOTES)
-                .map(row -> new RankedGame(row.gameId(), row.title(), average(row), mine.get(row.gameId())))
+                .map(row -> new RankedGame(row.title(), row.gameId(), average(row), mine.get(row.gameId())))
                 .sorted(Comparator.comparingDouble(RankedGame::average).reversed()
                         .thenComparing(RankedGame::title))
                 .limit(TOP_N)
